@@ -1,12 +1,22 @@
 //! ssb-tfk
-//! A module that implements the tfk encoding of ssb message keys.
+//!
+//! A module that implements the Type Format Key (TFK) encoding of ssb message keys.
 //! Spec defined [here](https://github.com/ssbc/envelope-spec/blob/master/encoding/tfk.md)
+//!
+//! Enable the `multiformats` feature to include type conversions to / from multiformats types.
 
 use snafu::{OptionExt, ResultExt, Snafu};
+
+#[cfg(feature = "multiformats")]
 pub use ssb_multiformats::multifeed::Multifeed;
+#[cfg(feature = "multiformats")]
 pub use ssb_multiformats::multihash::Multihash;
+#[cfg(feature = "multiformats")]
 pub use ssb_multiformats::multikey::Multikey;
+
+#[cfg(feature = "multiformats")]
 use std::convert::TryFrom;
+
 use std::io::Read;
 use std::io::Write;
 
@@ -19,11 +29,13 @@ pub enum Error {
     ReadError { source: std::io::Error },
 }
 
+// TODO: use constants from ssb_crypto
 const FEED_KEY_LENGTH: usize = 32;
 const MESSAGE_KEY_LENGTH: usize = 32;
 const BLOB_KEY_LENGTH: usize = 32;
 const DIFFIE_HELLMAN_KEY_LENGTH: usize = 32;
 
+/// A KeyType represents the type of the key, as well as owning the actual bytes of the key.
 #[derive(Copy, Clone, PartialEq, Debug)]
 pub enum KeyType {
     Feed([u8; FEED_KEY_LENGTH]),                    // 0
@@ -33,7 +45,7 @@ pub enum KeyType {
 }
 
 impl KeyType {
-    pub fn get_encoding_byte(&self) -> u8 {
+    pub fn get_encoding_type_byte(&self) -> u8 {
         match self {
             KeyType::Feed(_) => 0,
             KeyType::Message(_) => 1,
@@ -77,6 +89,7 @@ impl KeyType {
     }
 }
 
+/// Format encodes the message format, either `Classic` (javascript ssb) or `GabbyGrove` (go ssb)
 #[derive(Copy, Clone, PartialEq, Debug)]
 pub enum Format {
     Classic = 0,
@@ -101,6 +114,8 @@ impl Format {
     }
 }
 
+/// TypeFormatKey is able to represent any of the current ssb key types and encode / decode them to
+/// the TFK binary representation.
 #[derive(PartialEq, Debug)]
 pub struct TypeFormatKey {
     pub key_type: KeyType,
@@ -113,7 +128,7 @@ impl TypeFormatKey {
     }
 
     pub fn encode_write<W: Write>(&self, writer: &mut W) -> Result<(), Error> {
-        let type_byte = self.key_type.get_encoding_byte();
+        let type_byte = self.key_type.get_encoding_type_byte();
         writer.write(&[type_byte]).context(WriteError)?;
 
         self.format.encode_write(writer)?;
@@ -138,7 +153,8 @@ impl TypeFormatKey {
     }
 }
 
-// All Multihashes can be converted to a TypeFormatKey so this conversion can never fail.
+/// All Multihashes can be converted to a TypeFormatKey so this conversion can never fail.
+#[cfg(feature = "multiformats")]
 impl From<Multihash> for TypeFormatKey {
     fn from(multihash: Multihash) -> Self {
         let key_type = match multihash {
@@ -153,7 +169,8 @@ impl From<Multihash> for TypeFormatKey {
     }
 }
 
-// All Multifeeds can be converted to a TypeFormatKey so this conversion can never fail.
+/// All Multifeeds can be converted to a TypeFormatKey so this conversion can never fail.
+#[cfg(feature = "multiformats")]
 impl From<Multifeed> for TypeFormatKey {
     fn from(multifeed: Multifeed) -> Self {
         let key_type = match multifeed {
@@ -167,7 +184,8 @@ impl From<Multifeed> for TypeFormatKey {
     }
 }
 
-// _Not_all TypeFormatKeys are Multihashes so this conversion can fail.
+/// _Not_ all TypeFormatKeys are Multihashes so this conversion can fail.
+#[cfg(feature = "multiformats")]
 impl TryFrom<TypeFormatKey> for Multihash {
     type Error = Error;
 
@@ -180,7 +198,8 @@ impl TryFrom<TypeFormatKey> for Multihash {
     }
 }
 
-// _Not_all TypeFormatKeys are Multihashes so this conversion can fail.
+/// _Not_ all TypeFormatKeys are Multifeeds so this conversion can fail.
+#[cfg(feature = "multiformats")]
 impl TryFrom<TypeFormatKey> for Multifeed {
     type Error = Error;
 
@@ -195,7 +214,9 @@ impl TryFrom<TypeFormatKey> for Multifeed {
 #[cfg(test)]
 mod tests {
     use crate::*;
+    #[cfg(feature = "multiformats")]
     use std::convert::TryFrom;
+
 
     #[test]
     fn encode_decode() {
@@ -213,8 +234,12 @@ mod tests {
         assert_eq!(decoded, tfk);
     }
 
+    // To run the tests below, you need to enable the multiformats feature eg `$ cargo test
+    // --features="multiformats"`
+    
+    // Converts from a ssb "legacy" string message id -> multihash  -> tfk -> binary encoded tfk -> tfk -> multihash
     #[test]
-    // Converts from a ssb "legacy" string -> multihash  -> tfk -> binary encoded tfk -> tfk -> multihash
+    #[cfg(feature = "multiformats")]
     fn message_from_to_multihash() {
         let (multihash, _) =
             Multihash::from_legacy(b"%39f9I0e4bEln+yy6850joHRTqmEQfUyxssv54UANNuk=.sha256")
@@ -235,8 +260,9 @@ mod tests {
         assert_eq!(new_multihash, multihash);
     }
 
+    // Converts from a ssb "legacy" string blob id -> multihash  -> tfk -> binary encoded tfk -> tfk -> multihash
     #[test]
-    // Converts from a ssb "legacy" string -> multihash  -> tfk -> binary encoded tfk -> tfk -> multihash
+    #[cfg(feature = "multiformats")]
     fn blob_from_to_multihash() {
         let (multihash, _) =
             Multihash::from_legacy(b"&39f9I0e4bEln+yy6850joHRTqmEQfUyxssv54UANNuk=.sha256")
@@ -257,8 +283,9 @@ mod tests {
         assert_eq!(new_multihash, multihash);
     }
 
+    // Converts from a ssb "legacy" string feed id -> multifeed  -> tfk -> binary encoded tfk -> tfk -> multifeed
     #[test]
-    // Converts from a ssb "legacy" string -> multifeed  -> tfk -> binary encoded tfk -> tfk -> multifeed
+    #[cfg(feature = "multiformats")]
     fn feed_from_to_multifeed() {
         let (multifeed, _) =
             Multifeed::from_legacy(b"@EtTsMe7l6ap8aRHp2H4XaUpqZpXkieOqjjM7cvj493Q=.ed25519")
