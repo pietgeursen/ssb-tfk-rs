@@ -1,0 +1,11 @@
+[package]
+name = "ssb-tfk"
+version = "0.1.0"
+authors = ["Piet Geursen <pietgeursen@gmail.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+snafu = "0.6.9"
+ssb-multiformats = { git = "https://github.com/sunrise-choir/ssb-multiformats", branch = "less-restricted-api" }
