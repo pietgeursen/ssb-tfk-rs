@@ -1,10 +1,11 @@
 //! ssb-tfk
-//!
 //! A module that implements the tfk encoding of ssb message keys.
 //! Spec defined [here](https://github.com/ssbc/envelope-spec/blob/master/encoding/tfk.md)
 
 use snafu::{OptionExt, ResultExt, Snafu};
 use ssb_multiformats::multihash::Multihash;
+use std::convert::TryInto;
+use std::io::Read;
 use std::io::Write;
 
 #[derive(Snafu, Debug)]
@@ -13,31 +14,62 @@ pub enum Error {
     InvalidFormat,
     NotEnoughBytes,
     WriteError { source: std::io::Error },
+    ReadError { source: std::io::Error },
 }
+
+const FEED_KEY_LENGTH: usize = 32;
+const MESSAGE_KEY_LENGTH: usize = 32;
+const BLOB_KEY_LENGTH: usize = 32;
+const DIFFIE_HELLMAN_KEY_LENGTH: usize = 32;
 
 #[derive(Copy, Clone, PartialEq, Debug)]
-pub enum Type {
-    Feed = 0,
-    Message = 1,
-    Blob = 2,
-    DiffieHellman = 3,
+pub enum KeyType {
+    Feed([u8; FEED_KEY_LENGTH]),                    // 0
+    Message([u8; MESSAGE_KEY_LENGTH]),              // 1
+    Blob([u8; BLOB_KEY_LENGTH]),                    // 2
+    DiffieHellman([u8; DIFFIE_HELLMAN_KEY_LENGTH]), // 3
 }
 
-impl Type {
-    pub fn encode(&self) -> u8 {
-        *self as u8
+impl KeyType {
+    pub fn get_encoding_byte(&self) -> u8 {
+        match self {
+            KeyType::Feed(_) => 0,
+            KeyType::Message(_) => 1,
+            KeyType::Blob(_) => 2,
+            KeyType::DiffieHellman(_) => 3,
+        }
+    }
+    pub fn get_key_bytes(&self) -> &[u8] {
+        match self {
+            KeyType::Feed(bytes) => bytes,
+            KeyType::Message(bytes) => bytes,
+            KeyType::Blob(bytes) => bytes,
+            KeyType::DiffieHellman(bytes) => bytes,
+        }
     }
 
-    pub fn encode_write<W: Write>(&self, writer: &mut W) -> Result<(), Error> {
-        writer.write(&[self.encode()]).context(WriteError)?;
-        Ok(())
-    }
-    pub fn decode(byte: u8) -> Result<Self, Error> {
-        match byte {
-            0 => Ok(Type::Feed),
-            1 => Ok(Type::Message),
-            2 => Ok(Type::Blob),
-            3 => Ok(Type::DiffieHellman),
+    pub fn decode_read<R: Read>(type_byte: u8, reader: &mut R) -> Result<Self, Error> {
+        match type_byte {
+            0 => {
+                let mut key_bytes = [0u8; FEED_KEY_LENGTH];
+                reader.read_exact(&mut key_bytes).context(ReadError)?;
+                Ok(KeyType::Feed(key_bytes))
+            }
+            1 => {
+                let mut key_bytes = [0u8; MESSAGE_KEY_LENGTH];
+                reader.read_exact(&mut key_bytes).context(ReadError)?;
+                Ok(KeyType::Message(key_bytes))
+            }
+            2 => {
+                let mut key_bytes = [0u8; BLOB_KEY_LENGTH];
+                reader.read_exact(&mut key_bytes).context(ReadError)?;
+                Ok(KeyType::Blob(key_bytes))
+            }
+            3 => {
+                let mut key_bytes = [0u8; DIFFIE_HELLMAN_KEY_LENGTH];
+                reader.read_exact(&mut key_bytes).context(ReadError)?;
+                Ok(KeyType::DiffieHellman(key_bytes))
+            }
             _ => Err(Error::InvalidType),
         }
     }
@@ -66,55 +98,53 @@ impl Format {
         }
     }
 }
-// TODO: let's use a vec here to start with. Later we could think about AsRef / Borrow or even just an
-// array.
-#[derive(PartialEq, Debug)]
-pub struct Key(Vec<u8>);
 
 #[derive(PartialEq, Debug)]
 pub struct TypeFormatKey {
-    pub tipe: Type,
+    pub key_type: KeyType,
     pub format: Format,
-    pub key: Key,
 }
 
 impl TypeFormatKey {
-    pub fn new(tipe: Type, format: Format, key: Key) -> TypeFormatKey {
-        TypeFormatKey { tipe, format, key }
+    pub fn new(key_type: KeyType, format: Format) -> TypeFormatKey {
+        TypeFormatKey { key_type, format }
     }
 
     pub fn encode_write<W: Write>(&self, writer: &mut W) -> Result<(), Error> {
-        self.tipe.encode_write(writer)?;
+        let type_byte = self.key_type.get_encoding_byte();
+        writer.write(&[type_byte]).context(WriteError)?;
+
         self.format.encode_write(writer)?;
-        writer.write(&self.key.0).context(WriteError)?;
+
+        let key = self.key_type.get_key_bytes();
+        writer.write(key).context(WriteError)?;
         Ok(())
     }
 
-    // TODO make this decode_read OR return the number of bytes read.
-    pub fn decode(bytes: &[u8]) -> Result<TypeFormatKey, Error> {
-        let tipe_byte = bytes.get(0).context(NotEnoughBytes)?;
-        let tipe = Type::decode(*tipe_byte)?;
+    pub fn decode_read<R: Read>(reader: &mut R) -> Result<TypeFormatKey, Error> {
+        let mut header_bytes = [0u8; 2];
+        reader.read_exact(&mut header_bytes).context(ReadError)?;
 
-        let format_byte = bytes.get(1).context(NotEnoughBytes)?;
+        let key_type_byte = header_bytes.get(0).context(NotEnoughBytes)?;
+
+        let format_byte = header_bytes.get(1).context(NotEnoughBytes)?;
         let format = Format::decode(*format_byte)?;
 
-        let key_bytes = bytes.get(2..).context(NotEnoughBytes)?;
-        let key = Key(key_bytes.to_owned());
+        let key_type = KeyType::decode_read(*key_type_byte, reader)?;
 
-        Ok(TypeFormatKey { tipe, format, key })
+        Ok(TypeFormatKey { key_type, format })
     }
 }
 
 impl From<Multihash> for TypeFormatKey {
     fn from(multihash: Multihash) -> Self {
-        let (tipe, key) = match multihash {
-            Multihash::Message(hash) => (Type::Message, hash),
-            Multihash::Blob(hash) => (Type::Blob, hash),
+        let key_type = match multihash {
+            Multihash::Message(hash) => KeyType::Message(hash),
+            Multihash::Blob(hash) => KeyType::Blob(hash),
         };
 
         TypeFormatKey {
-            tipe,
-            key: Key(key.into()),
+            key_type,
             format: Format::Classic,
         }
     }
@@ -126,21 +156,16 @@ mod tests {
 
     #[test]
     fn encode_decode() {
-        let tipe = Type::Blob;
+        let key_type = KeyType::Blob([6; BLOB_KEY_LENGTH]);
         let format = Format::GabbyGrove;
-        let key = Key(vec![3, 4]);
 
-        let tfk = TypeFormatKey {
-            tipe,
-            format,
-            key,
-        };
+        let tfk = TypeFormatKey { key_type, format };
 
         let mut encoded = Vec::new();
 
         tfk.encode_write(&mut encoded).unwrap();
 
-        let decoded = TypeFormatKey::decode(&encoded).unwrap();
+        let decoded = TypeFormatKey::decode_read(&mut encoded.as_slice()).unwrap();
 
         assert_eq!(decoded, tfk);
     }
