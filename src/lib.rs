@@ -3,8 +3,10 @@
 //! Spec defined [here](https://github.com/ssbc/envelope-spec/blob/master/encoding/tfk.md)
 
 use snafu::{OptionExt, ResultExt, Snafu};
-use ssb_multiformats::multihash::Multihash;
-use std::convert::TryInto;
+pub use ssb_multiformats::multifeed::Multifeed;
+pub use ssb_multiformats::multihash::Multihash;
+pub use ssb_multiformats::multikey::Multikey;
+use std::convert::TryFrom;
 use std::io::Read;
 use std::io::Write;
 
@@ -136,6 +138,7 @@ impl TypeFormatKey {
     }
 }
 
+// All Multihashes can be converted to a TypeFormatKey so this conversion can never fail.
 impl From<Multihash> for TypeFormatKey {
     fn from(multihash: Multihash) -> Self {
         let key_type = match multihash {
@@ -150,9 +153,49 @@ impl From<Multihash> for TypeFormatKey {
     }
 }
 
+// All Multifeeds can be converted to a TypeFormatKey so this conversion can never fail.
+impl From<Multifeed> for TypeFormatKey {
+    fn from(multifeed: Multifeed) -> Self {
+        let key_type = match multifeed {
+            Multifeed::Multikey(Multikey::Ed25519(hash)) => KeyType::Feed(hash.0),
+        };
+
+        TypeFormatKey {
+            key_type,
+            format: Format::Classic,
+        }
+    }
+}
+
+// _Not_all TypeFormatKeys are Multihashes so this conversion can fail.
+impl TryFrom<TypeFormatKey> for Multihash {
+    type Error = Error;
+
+    fn try_from(type_format_key: TypeFormatKey) -> Result<Self, Self::Error> {
+        match type_format_key.key_type {
+            KeyType::Message(key) => Ok(Multihash::Message(key)),
+            KeyType::Blob(key) => Ok(Multihash::Blob(key)),
+            _ => Err(Error::InvalidType),
+        }
+    }
+}
+
+// _Not_all TypeFormatKeys are Multihashes so this conversion can fail.
+impl TryFrom<TypeFormatKey> for Multifeed {
+    type Error = Error;
+
+    fn try_from(type_format_key: TypeFormatKey) -> Result<Self, Self::Error> {
+        match type_format_key.key_type {
+            KeyType::Feed(key) => Ok(Multifeed::Multikey(Multikey::from_ed25519(&key))),
+            _ => Err(Error::InvalidType),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::*;
+    use std::convert::TryFrom;
 
     #[test]
     fn encode_decode() {
@@ -168,5 +211,71 @@ mod tests {
         let decoded = TypeFormatKey::decode_read(&mut encoded.as_slice()).unwrap();
 
         assert_eq!(decoded, tfk);
+    }
+
+    #[test]
+    // Converts from a ssb "legacy" string -> multihash  -> tfk -> binary encoded tfk -> tfk -> multihash
+    fn message_from_to_multihash() {
+        let (multihash, _) =
+            Multihash::from_legacy(b"%39f9I0e4bEln+yy6850joHRTqmEQfUyxssv54UANNuk=.sha256")
+                .unwrap();
+        let tfk: TypeFormatKey = multihash.clone().into();
+        match tfk.key_type {
+            KeyType::Message(_) => (),
+            _ => assert!(false, "Incorrect key type"),
+        }
+
+        let mut encoded = Vec::new();
+
+        tfk.encode_write(&mut encoded).unwrap();
+
+        let decoded = TypeFormatKey::decode_read(&mut encoded.as_slice()).unwrap();
+
+        let new_multihash = Multihash::try_from(decoded).unwrap();
+        assert_eq!(new_multihash, multihash);
+    }
+
+    #[test]
+    // Converts from a ssb "legacy" string -> multihash  -> tfk -> binary encoded tfk -> tfk -> multihash
+    fn blob_from_to_multihash() {
+        let (multihash, _) =
+            Multihash::from_legacy(b"&39f9I0e4bEln+yy6850joHRTqmEQfUyxssv54UANNuk=.sha256")
+                .unwrap();
+        let tfk: TypeFormatKey = multihash.clone().into();
+        match tfk.key_type {
+            KeyType::Blob(_) => (),
+            _ => assert!(false, "Incorrect key type"),
+        }
+
+        let mut encoded = Vec::new();
+
+        tfk.encode_write(&mut encoded).unwrap();
+
+        let decoded = TypeFormatKey::decode_read(&mut encoded.as_slice()).unwrap();
+
+        let new_multihash = Multihash::try_from(decoded).unwrap();
+        assert_eq!(new_multihash, multihash);
+    }
+
+    #[test]
+    // Converts from a ssb "legacy" string -> multifeed  -> tfk -> binary encoded tfk -> tfk -> multifeed
+    fn feed_from_to_multifeed() {
+        let (multifeed, _) =
+            Multifeed::from_legacy(b"@EtTsMe7l6ap8aRHp2H4XaUpqZpXkieOqjjM7cvj493Q=.ed25519")
+                .unwrap();
+        let tfk: TypeFormatKey = multifeed.clone().into();
+        match tfk.key_type {
+            KeyType::Feed(_) => (),
+            _ => assert!(false, "Incorrect key type"),
+        }
+
+        let mut encoded = Vec::new();
+
+        tfk.encode_write(&mut encoded).unwrap();
+
+        let decoded = TypeFormatKey::decode_read(&mut encoded.as_slice()).unwrap();
+
+        let new_multifeed = Multifeed::try_from(decoded).unwrap();
+        assert_eq!(new_multifeed, multifeed);
     }
 }
