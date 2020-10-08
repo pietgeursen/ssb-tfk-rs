@@ -11,4 +11,4 @@ multiformats = ["ssb-multiformats"]
 
 [dependencies]
 snafu = "0.6.9"
-ssb-multiformats = { git = "https://github.com/sunrise-choir/ssb-multiformats", branch = "less-restricted-api", optional = true }
+ssb-multiformats = { version = "0.3.0", optional = true }
