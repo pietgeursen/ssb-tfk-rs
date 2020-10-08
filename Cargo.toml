@@ -4,6 +4,10 @@ version = "0.1.0"
 authors = ["Piet Geursen <pietgeursen@gmail.com>"]
 license = "AGPL-3.0"
 edition = "2018"
+description = "TypeFormatKey binary encoding of Secure Scuttlebutt Key types"
+repository = "https://github.com/pietgeursen/ssb-tfk"
+documentation = "https://docs.rs/ssb-tfk/"
+keywords = ["ssb", "scuttlebutt"]
 
 [features]
 default = []
